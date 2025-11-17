@@ -1,9 +1,11 @@
 import json
+from constants import domain
 from typing import List
 import requests
 from bs4 import BeautifulSoup
 import os
 from requests.models import Response
+import time
 
 headers = {
     "Accept": "image/webp,*/*",
@@ -83,7 +85,7 @@ class Post_file:
 
     @property
     def download_link(self):
-        return f'https://2ch.hk{self.path}'
+        return f'https://2ch{domain}{self.path}'
 
 
 class Post:
@@ -234,13 +236,14 @@ class Thread:
 
     @property
     def json_posts_link(self) -> str:
-        # return f"https://2ch.hk/makaba/mobile.fcgi?task=get_thread&board={self.board_name}&thread={self.num}&post=1"
-        return f"https://2ch.hk/{self.board_name}/res/{self.num}.json"
+        # return
+        # f"https://2ch{domain}/makaba/mobile.fcgi?task=get_thread&board={self.board_name}&thread={self.num}&post=1"
+        return f"https://2ch{domain}/{self.board_name}/res/{self.num}.json"
 
     @property
     def get_link(self) -> str:
         """Ссылка на тред"""
-        return f'https://2ch.hk/{self.board_name}/res/{self.num}.html'
+        return f'https://2ch{domain}/{self.board_name}/res/{self.num}.html'
 
 
 class BoardRefreshInfo:
@@ -333,7 +336,7 @@ class Board:
     @property
     def json_link(self) -> str:
         """Ссылка на список тредов json"""
-        return f'https://2ch.hk/{self.name}/threads.json'
+        return f'https://2ch{domain}/{self.name}/threads.json'
 
 
 class HtmlGenerator:
