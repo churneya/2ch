@@ -1,4 +1,7 @@
 __pycache__/
 .vscode/
+.idea/
 media
-saver
+saver/
+saver_old/
+.opencode/
