@@ -129,7 +129,6 @@ class Thread:
     unique_posters: int  # определяется по оп посту
 
     board_name: str  # тред должен знать на какой он доске
-    posts = []
     score_history = []
 
     def __init__(self, board_name: str, json_thread_data=''):
@@ -138,6 +137,8 @@ class Thread:
 
         json_thread_data - json от доски (там нет списка постов)
         """
+        self.posts = []
+        self.score_history = []
         if json_thread_data != '':
             self.comment = json_thread_data['comment']
             self.comment_html = json_thread_data['comment']
@@ -177,7 +178,8 @@ class Thread:
 
         html = HtmlGenerator.get_thread_htmlpage(self)
         save_path = os.path.normpath(f'{folder_path}/thread_{self.num}.html')
-        open(save_path, 'w', encoding='utf-8').write(html)
+        with open(save_path, 'w', encoding='utf-8') as output:
+            output.write(html)
         return save_path
 
     def update_posts(self):
@@ -330,7 +332,8 @@ class HtmlGenerator:
 
     @staticmethod
     def _read_block(name: str) -> str:
-        return open(os.path.normpath(f'page_gen/blocks/{name}'), encoding='utf-8').read()
+        with open(os.path.normpath(f'page_gen/blocks/{name}'), encoding='utf-8') as block:
+            return block.read()
 
     @staticmethod
     def _replace_str_in_html(html: str, key: str, value: str):
@@ -348,12 +351,14 @@ class HtmlGenerator:
 
     @staticmethod
     def get_htmlhead(thread: Thread) -> str:
+        with open(os.path.normpath('page_gen/style.css'), encoding='utf-8') as stylesheet:
+            style = stylesheet.read()
         return f"""
         <head>
             <meta charset="UTF-8">
             <meta http-equiv="X-UA-Compatible" content="IE=edge">
             <style>
-                {open(os.path.normpath(f'page_gen/style.css'), encoding='utf-8').read()}
+                {style}
             </style>
             <title>{thread.get_op_post.comment}</title>
         </head>
@@ -445,9 +450,16 @@ def download_link(link: str, retries=3) -> Response:
     Args:
         link (str): ссылка на скачивание
     """
-    for _ in range(retries):
+    last_error = None
+    for attempt in range(retries):
         try:
-            return requests.get(link, timeout=15, stream=True)
+            response = requests.get(link, timeout=15, stream=True)
+            response.raise_for_status()
+            return response
         except requests.exceptions.SSLError as e:
-            time.sleep(1)
-    raise
+            last_error = e
+            if attempt + 1 < retries:
+                time.sleep(1)
+    if last_error is not None:
+        raise last_error
+    raise ValueError("retries must be greater than zero")

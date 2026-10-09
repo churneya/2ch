@@ -2,6 +2,8 @@ import unittest
 import dvach
 import filecompare
 import os
+import requests
+from unittest.mock import Mock, patch
 
 
 class TestAnalytics(unittest.TestCase):
@@ -158,3 +160,34 @@ class TestAnalytics(unittest.TestCase):
         self.assertEqual(thread.IsOk(["зумер"]), True)
         self.assertEqual(thread.IsOk(["продолжаем"]), True)
         self.assertEqual(thread.IsOk(["зумеры"]), False)
+
+    def test_thread_posts_are_not_shared_between_instances(self):
+        first = dvach.Thread('b')
+        first.posts.append(object())
+
+        second = dvach.Thread('news')
+
+        self.assertEqual(second.posts, [])
+        self.assertIsNot(first.posts, second.posts)
+
+    @patch('dvach.time.sleep')
+    @patch('dvach.requests.get')
+    def test_download_link_rethrows_last_ssl_error(self, get, sleep):
+        error = requests.exceptions.SSLError('certificate error')
+        get.side_effect = error
+
+        with self.assertRaises(requests.exceptions.SSLError) as raised:
+            dvach.download_link('https://example.test/file', retries=2)
+
+        self.assertIs(raised.exception, error)
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    @patch('dvach.requests.get')
+    def test_download_link_raises_for_http_errors(self, get):
+        response = Mock()
+        response.raise_for_status.side_effect = requests.exceptions.HTTPError('404')
+        get.return_value = response
+
+        with self.assertRaises(requests.exceptions.HTTPError):
+            dvach.download_link('https://example.test/missing')
