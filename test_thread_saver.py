@@ -83,7 +83,6 @@ class TestThreadSaver(unittest.TestCase):
         argv = ['thread_saver.py'] + ([] if interactive else list(arguments))
         with patch.object(sys, 'argv', argv), \
                 patch('builtins.input', side_effect=[board, number]) as user_input, \
-                patch.object(dvach.Thread, 'posts', []), \
                 patch('time.sleep', side_effect=StopPolling) as sleep, \
                 patch('dvach.download_link', return_value=SimpleNamespace(content=b'media')) as download, \
                 patch.object(dvach.Post_file, 'save', autospec=True,
@@ -231,7 +230,7 @@ class TestThreadSaverAttachments(OfflineTestCase):
                 patch.object(thread_saver, 'FOLDER', folder), \
                 patch.object(thread_saver, 'SAVE_MEDIA', True):
             self.http.side_effect = None
-            self.http.return_value = SimpleNamespace(content=b'offline attachment')
+            self.http.return_value = Mock(content=b'offline attachment')
             thread_saver.add_new_posts(safe, downloaded.posts[:1])
             path = Path(safe.save(folder))
             self.assertEqual(path.parent, Path(folder))
