@@ -111,8 +111,8 @@ if __name__ == '__main__':
     if len(sys.argv) >= 3:
         FOLDER = sys.argv[2]
 
-    if not os.path.exists(FOLDER):
-        os.mkdir(FOLDER)
+    FOLDER = os.path.join(FOLDER, board_name, thread_num)
+    os.makedirs(FOLDER, exist_ok=True)
 
     board = get_board(board_name)
 
