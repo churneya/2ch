@@ -9,26 +9,14 @@ global FOLDER
 FOLDER = "saver"
 
 
-def get_board(board_name: str) -> dvach.Board:
-    while True:
-        try:
-            board = dvach.Board.from_json(
-                dvach.Board.json_download(board_name))
-            board.update_threads()
-            return board
-        except Exception as e:
-            print(f"Не удалось подключиться, повтор {type(e).__name__}")
-            time.sleep(5)
-
-
-def get_thread(board, thread_num):
+def get_thread(board_name, thread_num):
     thread_num = int(thread_num)
     while True:
-        if thread_num not in list(board.threads.keys()):
-            raise Exception('Тред не существует')
         try:
-            thread = board.threads[thread_num]
+            thread = dvach.Thread(board_name)
+            thread.num = thread_num
             thread.update_posts()
+            thread.comment_html = thread.get_op_post.comment_html
             return thread
         except:
             print("Не удалось получить тред, повтор")
@@ -114,16 +102,13 @@ if __name__ == '__main__':
     FOLDER = os.path.join(FOLDER, board_name, thread_num)
     os.makedirs(FOLDER, exist_ok=True)
 
-    board = get_board(board_name)
-
     # Скаченный тред с двача
-    thread = get_thread(board, thread_num)
+    thread = get_thread(board_name, thread_num)
 
     # Локальный тред на диске
     # Так как тред это ссылочный тип
     # Скопированы самые важные поля
     safe_thread = dvach.Thread(board_name)
-    safe_thread.lasthit = thread.lasthit
     safe_thread.num = thread.num
     safe_thread.comment_html = thread.comment_html
 
@@ -138,7 +123,7 @@ if __name__ == '__main__':
 
         try:
             # Снова скачать тред
-            thread = get_thread(board, thread_num)
+            thread = get_thread(board_name, thread_num)
         except:
             print("Ошибка, повтор")
             time.sleep(5)
