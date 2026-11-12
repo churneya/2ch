@@ -1,6 +1,7 @@
 import ast
 from contextlib import redirect_stdout
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -8,7 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from bs4 import BeautifulSoup
 
@@ -21,7 +22,73 @@ ROOT = Path(__file__).resolve().parent
 
 
 class StopPolling(BaseException):
-    """Stop after the first completed save, without entering network retries."""
+    """Stop after a completed save, without entering network retries."""
+
+
+class TestGetThread(unittest.TestCase):
+    def setUp(self):
+        fixture = json.loads((ROOT / 'test_files/posts_json.json').read_text(encoding='utf-8'))
+        posts = fixture['threads'][0]['posts'][:2]
+        for number, post in enumerate(posts, 2341729):
+            post['num'] = number
+        posts[0]['comment'] = '<b>Direct OP</b>'
+        self.payload = {'unique_posters': 2, 'threads': [{'posts': posts}]}
+        self.url = f'https://2ch{dvach.domain}/gg/res/2341729.json'
+        # Fail fast even if the helper accidentally bypasses download_link.
+        for target in ('dvach.requests.get', 'dvach.Board.json_download',
+                       'dvach.Board.update_threads'):
+            guard = patch(target, side_effect=AssertionError('Board/network call forbidden'))
+            mock = guard.start()
+            self.addCleanup(guard.stop)
+            self.addCleanup(mock.assert_not_called)
+
+    def response(self, payload):
+        return SimpleNamespace(text=json.dumps(payload))
+
+    def test_direct_thread_uses_real_parser_without_board_metadata(self):
+        with patch('dvach.download_link', return_value=self.response(self.payload)) as download, \
+                patch('time.sleep', side_effect=StopPolling) as sleep:
+            thread = thread_saver.get_thread('gg', '2341729')
+        download.assert_called_once_with(self.url)
+        sleep.assert_not_called()
+        self.assertIsInstance(thread, dvach.Thread)
+        self.assertEqual(thread.num, 2341729)
+        self.assertEqual(thread.board_name, 'gg')
+        self.assertEqual(thread.unique_posters, 2)
+        self.assertEqual([post.num for post in thread.posts], ['2341729', '2341730'])
+        self.assertEqual(thread.comment_html, '<b>Direct OP</b>')
+        self.assertEqual(thread.comment_html, thread.get_op_post.comment_html)
+        self.assertEqual(thread.get_op_post.comment, 'Direct OP')
+        self.assertEqual(thread.posts[1].comment_html,
+                         self.payload['threads'][0]['posts'][1]['comment'])
+        self.assertFalse(hasattr(thread, 'lasthit'))
+
+    def test_failed_download_or_parsing_retries_only_direct_url(self):
+        failures = (
+            dvach.requests.exceptions.HTTPError('404 Not Found'),
+            dvach.requests.exceptions.HTTPError('503 Service Unavailable'),
+            SimpleNamespace(text='{invalid JSON'),
+            self.response({'unique_posters': 0, 'threads': [{'posts': []}]}),
+        )
+        for failure in failures:
+            with self.subTest(failure=failure), \
+                    patch('dvach.download_link', side_effect=[failure, self.response(self.payload)]) as download, \
+                    patch('time.sleep', side_effect=[None, StopPolling]) as sleep, \
+                    redirect_stdout(io.StringIO()) as output:
+                thread = thread_saver.get_thread('gg', '2341729')
+                self.assertEqual(download.call_args_list, [call(self.url), call(self.url)])
+                sleep.assert_called_once_with(5)
+                self.assertEqual(output.getvalue(), 'Не удалось получить тред, повтор\n')
+                self.assertEqual(thread.comment_html, '<b>Direct OP</b>')
+                self.assertEqual(len(thread.posts), 2)
+
+    def test_invalid_number_fails_before_download_or_retry(self):
+        with patch('dvach.download_link') as download, \
+                patch('time.sleep', side_effect=StopPolling) as sleep:
+            with self.assertRaises(ValueError):
+                thread_saver.get_thread('gg', 'not-a-number')
+        download.assert_not_called()
+        sleep.assert_not_called()
 
 
 class TestThreadSaver(unittest.TestCase):
@@ -39,6 +106,11 @@ class TestThreadSaver(unittest.TestCase):
             'dvach.requests.get', side_effect=AssertionError('Unexpected network request'))
         self.network_guard.start()
         self.addCleanup(self.network_guard.stop)
+        for target in ('dvach.Board.json_download', 'dvach.Board.update_threads'):
+            guard = patch(target, side_effect=AssertionError('Board call forbidden'))
+            mock = guard.start()
+            self.addCleanup(guard.stop)
+            self.addCleanup(mock.assert_not_called)
 
         # Load definitions and the unchanged main block separately so script
         # settings and network boundaries can be patched before main executes.
@@ -65,7 +137,6 @@ class TestThreadSaver(unittest.TestCase):
         })
         thread = dvach.Thread(board)
         thread.num = number
-        thread.lasthit = 0
         thread.comment_html = post.comment_html
         thread.posts = [post]
         return thread
@@ -76,10 +147,8 @@ class TestThreadSaver(unittest.TestCase):
         thread = self.make_thread(board, number, names)
         namespace = {'__name__': '__main__'}
         exec(self.definitions, namespace)
-        self.get_board = Mock(return_value=dvach.Board(board, {}))
         self.get_thread = Mock(return_value=thread)
-        namespace.update(get_board=self.get_board, get_thread=self.get_thread,
-                         SAVE_MEDIA=save_media)
+        namespace.update(get_thread=self.get_thread, SAVE_MEDIA=save_media)
         argv = ['thread_saver.py'] + ([] if interactive else list(arguments))
         with patch.object(sys, 'argv', argv), \
                 patch('builtins.input', side_effect=[board, number]) as user_input, \
@@ -105,8 +174,7 @@ class TestThreadSaver(unittest.TestCase):
                 self.assertEqual(user_input.call_count, 2)
             else:
                 user_input.assert_not_called()
-        self.get_board.assert_called_once_with(board)
-        self.get_thread.assert_called_once_with(self.get_board.return_value, number)
+        self.get_thread.assert_called_once_with(board, number)
         self.assertEqual(thread.posts, [thread.get_op_post])
         return namespace
 
@@ -117,6 +185,92 @@ class TestThreadSaver(unittest.TestCase):
         self.assertEqual(self.download.call_count, len(paths))
         for path in paths:
             self.assertEqual(Path(path).read_bytes(), b'media')
+
+    def direct_payload(self, names=('image.jpg',), reply_number=2341730):
+        op = {
+            'num': 2341729, 'comment': '<b>Direct OP</b>', 'date': '09/10/26',
+            'email': '', 'op': 1,
+            'files': [
+                {'displayname': name, 'name': name,
+                 'path': f'/gg/src/2341729/{name}',
+                 'width': 1, 'height': 1, 'size': 1}
+                for name in names
+            ],
+        }
+        reply = {
+            'num': reply_number, 'comment': f'Reply {reply_number}',
+            'date': '09/10/26', 'email': '', 'op': 0, 'files': [],
+        }
+        return {'unique_posters': 2, 'threads': [{'posts': [op, reply]}]}
+
+    def run_direct_saver(self, payloads):
+        namespace = {'__name__': '__main__'}
+        exec(self.definitions, namespace)
+        url = f'https://2ch{dvach.domain}/gg/res/2341729.json'
+        snapshots = iter(payloads)
+
+        def download(link):
+            if link == url:
+                return SimpleNamespace(text=json.dumps(next(snapshots)))
+            self.assertEqual(link, f'https://2ch{dvach.domain}/gg/src/2341729/image.jpg')
+            return SimpleNamespace(content=b'direct media')
+
+        with patch.object(sys, 'argv', ['thread_saver.py', 'gg', '2341729']), \
+                patch('dvach.download_link', side_effect=download) as http, \
+                patch('time.sleep', side_effect=[None] * (len(payloads) - 1) + [StopPolling]) as sleep, \
+                redirect_stdout(io.StringIO()) as output:
+            with self.assertRaises(StopPolling):
+                exec(self.main, namespace)
+        self.assertEqual(sleep.call_args_list, [call(namespace['DELAY'])] * len(payloads))
+        self.assertEqual([request for request in http.call_args_list if request == call(url)],
+                         [call(url)] * len(payloads))
+        return namespace, http, output.getvalue()
+
+    def test_direct_json_saves_real_html_with_and_without_op_media(self):
+        for names in (('image.jpg',), ()):
+            with self.subTest(names=names):
+                namespace, http, _ = self.run_direct_saver([self.direct_payload(names)])
+                destination = Path('saver/gg/2341729')
+                html_path = destination / 'thread_2341729.html'
+                page = BeautifulSoup(html_path.read_text(encoding='utf-8'), 'html.parser')
+                self.assertIn('Direct OP', page.get_text())
+                self.assertIn('2341729', page.get_text())
+                self.assertIn('Reply 2341730', page.get_text())
+                self.assertIsNotNone(page.find('b', string='Direct OP'))
+                self.assertFalse(hasattr(namespace['thread'], 'lasthit'))
+                self.assertFalse(hasattr(namespace['safe_thread'], 'lasthit'))
+                self.assertIsNot(namespace['safe_thread'].posts, namespace['thread'].posts)
+                if names:
+                    image = page.find('img', src='./image.jpg')
+                    self.assertIsNotNone(image)
+                    self.assertEqual((destination / image['src']).read_bytes(), b'direct media')
+                    self.assertEqual(http.call_count, 2)
+                else:
+                    self.assertFalse(page.select('.op_post_file'))
+                    self.assertEqual(list(destination.iterdir()), [html_path])
+                    self.assertEqual(http.call_count, 1)
+                shutil.rmtree('saver')
+
+    def test_direct_polling_accumulates_posts_and_reports_deleted_reply(self):
+        namespace, http, output = self.run_direct_saver([
+            self.direct_payload(), self.direct_payload(reply_number=2341731),
+        ])
+        url = f'https://2ch{dvach.domain}/gg/res/2341729.json'
+        media_url = f'https://2ch{dvach.domain}/gg/src/2341729/image.jpg'
+        self.assertEqual(http.call_args_list, [call(url), call(media_url), call(url)])
+        self.assertEqual([post.num for post in namespace['safe_thread'].posts],
+                         ['2341729', '2341730', '2341731'])
+        self.assertEqual([post.num for post in namespace['thread'].posts],
+                         ['2341729', '2341731'])
+        self.assertEqual(namespace['deleted_posts'], ['2341730'])
+        for number in ('2341729', '2341730', '2341731'):
+            self.assertEqual(output.count(f'Новый пост: {number}\n'), 1)
+        self.assertEqual(output.count('Удаленный пост: 2341730\n'), 1)
+        page = BeautifulSoup(Path('saver/gg/2341729/thread_2341729.html').read_text(
+            encoding='utf-8'), 'html.parser')
+        self.assertIn('Direct OP', page.get_text())
+        self.assertIn('Reply 2341730', page.get_text())
+        self.assertIn('Reply 2341731', page.get_text())
 
     def test_s1_first_run(self):
         self.assertFalse(Path('saver').exists())
@@ -188,7 +342,6 @@ class TestThreadSaver(unittest.TestCase):
         self.assertFalse(Path('saver/b/123/image.jpg').exists())
 
     def assert_no_saving_started(self):
-        self.get_board.assert_not_called()
         self.get_thread.assert_not_called()
         self.media_save.assert_not_called()
         self.download.assert_not_called()
