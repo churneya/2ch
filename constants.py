@@ -1,1 +1,1 @@
-domain = ".su"
+domain = ".org"
