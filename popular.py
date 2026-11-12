@@ -31,7 +31,7 @@ def print_threads(threads):
 
 if __name__ == '__main__':
     # доска, которую нужно парсить
-    board_name = 'b'
+    board_name = 'gg'
 
     # Инициализация доски с тредами
     board = dvach.Board.from_json(dvach.Board.json_download(board_name))
